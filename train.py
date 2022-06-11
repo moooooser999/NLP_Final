@@ -3,9 +3,8 @@ from transformers import logging as lg
 import torch
 import os
 import logging
-import numpy as np
 
-from model import ForMultipleAns, ForBinaryClassifier
+from model import ForMultipleAns
 from pathlib import Path
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from torch.utils.data import DataLoader
@@ -14,7 +13,6 @@ import pandas as pd
 from tqdm.auto import tqdm
 from utils import (
     preprocess_for_task1,
-    preprocess_for_task1_binary,
     Task1Dataset,
     data_collator_for_train_and_dev,
     data_collator_for_test,
@@ -24,7 +22,7 @@ from utils import (
 )
 
 lg.set_verbosity_error()
-DEVICE = 'cuda:0'
+DEVICE = 'cuda:1'
 logger = logging.getLogger(__name__)
 num_labels = 18
 
@@ -83,26 +81,29 @@ def settle_model_and_data(strategy, model_name):
     if strategy == 'multi-label':
         train_data = preprocess_for_task1(args.train_data_dir, 'train')
         dev_data = preprocess_for_task1(args.dev_data_dir, 'dev')
-        model = ForMultipleAns(model_name, num_labels)
-        return train_data, dev_data, model
-    if strategy == 'binary':
-        train_data = preprocess_for_task1_binary(args.train_data_dir, 'train')
-        dev_data = preprocess_for_task1_binary(args.dev_data_dir, 'dev')
-        model = ForBinaryClassifier(model_name)
+        if model_name == 'hfl/chinese-macbert-large':
+            model = ForMultipleAns(model_name, num_labels,1024).to(DEVICE)
+            return train_data, dev_data, model
+        model = ForMultipleAns(model_name, num_labels).to(DEVICE)
         return train_data, dev_data, model
 
 
 def settle_test_data(strategy):
     if strategy == 'multi-label':
-        test_data = preprocess_for_task1(args.train_data_dir, 'test')
-        return test_data
-    if strategy == 'binary':
-        test_data = preprocess_for_task1_binary(args.train_data_dir, 'test')
+        test_data = preprocess_for_task1(args.test_data_dir, 'test')
         return test_data
 
 
 def main(args):
     # load data
+    model_dic = {
+        'macbert': 'hfl/chinese-macbert-base',
+        'macbert_large': 'hfl/chinese-macbert-large' ,
+        'chinanews': 'uer/roberta-base-finetuned-chinanews-chinese',
+        'ifeng': 'uer/roberta-base-finetuned-ifeng-chinese',
+        'dianping': 'uer/roberta-base-finetuned-dianping-chinese',
+        'jd_full': 'uer/roberta-base-finetuned-jd-full-chinese',
+    }
     wandb.init(project=args.project_name)
 
     logging.basicConfig(
@@ -111,16 +112,16 @@ def main(args):
         level=logging.INFO,
     )
     config = wandb.config
-    config.TRAIN_BATCH_SIZE = 4
-    config.DEV_BATCH_SIZE = 4
+    config.TRAIN_BATCH_SIZE = 8
+    config.DEV_BATCH_SIZE = 8
     config.EPOCH = 10
-    config.accumulate_steps = 8
+    config.accumulate_steps = 4
 
     # setup output dir
-    output_dir = str(args.output_dir) + '/' + args.model_name + '/' + args.strategy
+    output_dir = str(args.output_dir) + '/model/' + args.model_name + '/' + args.strategy
     # init model, tokenizer and data
-    # model_name = 'hfl/chinese-roberta-wwm-ext-large'
-    model_name = 'hfl/chinese-macbert-base'
+    model_name = model_dic[args.model_name]
+
     train_data, dev_data, model = settle_model_and_data(args.strategy, model_name)
 
     train_dataset = Task1Dataset(train_data, 'train')
@@ -140,10 +141,11 @@ def main(args):
                             collate_fn=data_collator_for_train_and_dev)
 
     # progress bar
-    progress_bar_train = tqdm(range(config.EPOCH * len(train_loader) // config.accumulate_steps))
+    config.max_train_steps = len(train_loader)
+    progress_bar_train = tqdm(range(config.EPOCH * config.max_train_steps // config.accumulate_steps))
     progress_bar_dev = tqdm(range(config.EPOCH * len(dev_loader)))
 
-    total_training_steps = len(train_loader) * config.EPOCH // config.accumulate_steps
+    total_training_steps = config.max_train_steps * config.EPOCH // config.accumulate_steps
     warmup_steps = total_training_steps // 5
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
@@ -156,37 +158,40 @@ def main(args):
     best_score = 0
 
     for e in range(config.EPOCH):
+        train_loss_global = 0.0
+        val_loss_global = 0.0
         if args.do_train:
             model.train()
-            train_loss = 0.0
+            train_loss = 0
             for i, batch in enumerate(train_loader):
                 progress_bar_train.set_description(f'Epoch: {e}')
                 loss = train(batch, tokenizer, model)
 
                 loss /= config.accumulate_steps
                 train_loss += loss
+                train_loss_global += loss
                 loss.backward()
-                if (i + 1) % config.accumulate_steps == 0 or (i + 1) == len(train_loader):
+                if (i + 1) % config.accumulate_steps == 0 or (i + 1) == config.max_train_steps:
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
-                    wandb.log({
-                        'Train Loss': train_loss
-                    })
                     progress_bar_train.set_postfix(loss=train_loss)
                     progress_bar_train.update(1)
-                    train_loss = 0.0
+                    train_loss = 0
+                if i >= config.max_train_steps:
+                    logger.info('Reach Max Steps, Early Stopping')
+                    break
 
         if args.do_validate:
-            preds = []
-            labels = []
             ps_val_1 = []
             rc_val_1 = []
             model.eval()
             for batch in dev_loader:
                 progress_bar_dev.set_description(f'Epoch: {e}')
                 output, label = validate(batch, tokenizer, model)
-                progress_bar_dev.set_postfix(loss=output.loss)
+                loss = model.loss(output.logits.view(-1, 18).cpu(), label.float())
+                val_loss_global += loss
+                progress_bar_dev.set_postfix(loss=loss)
                 progress_bar_dev.update(1)
                 if args.strategy == 'multi-label':
                     pred = decode(output.logits, threshold)
@@ -194,10 +199,6 @@ def main(args):
                     rc_1 = recall_with_target(pred.cpu().numpy(), label.cpu().numpy())
                     ps_val_1 += ps_1
                     rc_val_1 += rc_1
-                if args.strategy == 'binary':
-                    pred = decode(output.logits, threshold)
-                    preds.append(pred.cpu())
-                    labels.append(label.cpu())
 
             ps_score_val_1 = 0
             rc_score_val_1 = 0
@@ -206,12 +207,6 @@ def main(args):
             if args.strategy == 'multi-label':
                 ps_score_val_1 = sum(ps_val_1) / len(ps_val_1)
                 rc_score_val_1 = sum(rc_val_1) / len(rc_val_1)
-                ma_f1_val_1 = macro_f1(ps_score_val_1, rc_score_val_1)
-            if args.strategy == 'binary':
-                preds = torch.stack(preds).view(-1, 18)
-                labels = torch.stack(labels).view(-1, 18)
-                ps_score_val_1 = precision_with_target(preds.numpy(), labels.numpy())
-                rc_score_val_1 = recall_with_target(preds.numpy(), labels.numpy())
                 ma_f1_val_1 = macro_f1(ps_score_val_1, rc_score_val_1)
             wandb.log({
                 'Macro F1 Val with target': ma_f1_val_1,
@@ -222,7 +217,12 @@ def main(args):
                 best_score = ma_f1_val_1
                 logger.info(f'Best Model Saved With Macro-F1: {best_score}')
                 os.makedirs(args.output_dir, exist_ok=True)
-                torch.save(model.state_dict(), output_dir + f'/best_model_w_adam_{best_score}.pt')
+                torch.save(model.state_dict(), output_dir + f'/best_model_w_adam_dianping_{best_score:.4f}.pt')
+        wandb.log({
+            'Train Loss': train_loss_global / (len(train_loader) // config.accumulate_steps),
+            'Val Loss': val_loss_global / len(dev_loader),
+        })
+
     if args.do_predict:
         test_data = settle_test_data(args.strategy)
         test_dataset = Task1Dataset(test_data, 'test')
@@ -231,6 +231,7 @@ def main(args):
         ids_ls = []
         pred_ls = []
         #
+        pred_logits = []
         for batch in test_dataloader:
             progress_bar_test.set_description(f'Testing')
             with torch.no_grad():
@@ -242,8 +243,41 @@ def main(args):
                     attention_mask=encoded_inputs.attention_mask.to(DEVICE),
                 )
             ids_ls.append(id_ls)
+            pred_logits.append(output.logits)
             pred_ls.append(decode(output.logits, threshold))
             progress_bar_test.update(1)
+        if args.ensemble:
+            pred_ensemble_logits = []
+            model_name_ls = args.model_name_ensemble
+            for i,model_name in enumerate(model_name_ls):
+                pred_2_logits = []
+                model = ForMultipleAns(model_name,18).to(DEVICE)
+                logger.info('Loading ensembled model...')
+                model.load_state_dict(torch.load(args.model_ckpt_ensemble[i]))
+                progress_bar_test = tqdm(range(len(test_dataloader)))
+                for batch in test_dataloader:
+                    progress_bar_test.set_description(f'Testing_model_{i+2}')
+                    with torch.no_grad():
+                        id_ls, input_text = batch
+                        encoded_inputs = tokenizer(input_text, max_length=512, padding='max_length', truncation=True,
+                                                   return_tensors='pt')
+                        output = model(
+                            input_ids=encoded_inputs.input_ids.to(DEVICE),
+                            attention_mask=encoded_inputs.attention_mask.to(DEVICE),
+                        )
+                    ids_ls.append(id_ls)
+                    pred_2_logits.append(output.logits)
+                    progress_bar_test.update(1)
+                pred_ensemble_logits.append(pred_2_logits)
+            pred_ls = []
+            for i, batch in enumerate(pred_logits):
+                sigmoid = torch.nn.Sigmoid()
+                probs_1 = sigmoid(batch)
+                for pred in pred_ensemble_logits:
+                    probs_1 += sigmoid(pred[i])
+                pred_ls.append((probs_1/(len(pred_ensemble_logits)+1) > threshold).int())
+
+
         to_output(pred_ls, ids_ls, args.output_dir)
 
 
@@ -264,6 +298,18 @@ def parse_args() -> Namespace:
     parser.add_argument(
         '--model_ckpt',
         type=Path,
+        help='Dir to pretrained or finetuned model',
+    )
+    parser.add_argument(
+        '--model_name_ensemble',
+        type=Path,
+        nargs='+',
+        help='Name of pretrained or finetuned model',
+    )
+    parser.add_argument(
+        '--model_ckpt_ensemble',
+        type=Path,
+        nargs='+',
         help='Dir to pretrained or finetuned model',
     )
     parser.add_argument(
@@ -303,6 +349,11 @@ def parse_args() -> Namespace:
         "--do_predict",
         type=bool,
         help='Set this to True to predict with test data',
+    )
+    parser.add_argument(
+        "--ensemble",
+        type=bool,
+        help='Set this to True to predict with two model',
     )
     parser.add_argument(
         '--strategy',

@@ -5,7 +5,6 @@ from typing import List, Dict
 
 from sklearn.metrics import precision_score, recall_score
 
-
 aspect_ls = [
     'Location#Transportation',
     'Location#Downtown',
@@ -26,6 +25,8 @@ aspect_ls = [
     'Food#Appearance',
     'Food#Recommend'
 ]
+
+
 class Task1Dataset(torch.utils.data.Dataset):
     def __init__(self, data: List[Dict], split):
         self.data = data
@@ -83,6 +84,8 @@ def preprocess_for_task1(data_path: str, split: str) -> List[Dict]:
             }
             data_list.append(data_dic)
     return data_list
+
+
 def preprocess_for_task1_binary(data_path: str, split: str) -> List[Dict]:
     data_list = []
     if split == "train" or split == "dev":
@@ -103,7 +106,7 @@ def preprocess_for_task1_binary(data_path: str, split: str) -> List[Dict]:
         data = pd.read_csv(data_path)
         for i in range(len(data)):
             data_point = data.iloc[i]
-            for j in range(18)
+            for j in range(18):
                 data_dic = {
                     'id': data_point[0],
                     'inputs': data_point[1] + ' [aspect] ' + aspect_ls[j],

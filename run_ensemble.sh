@@ -1,0 +1,13 @@
+python3 train.py \
+--project_name NLP_FINAL_PREDICT_ENSEMBLE \
+--model_name macbert_large \
+--model_ckpt ./output/model/macbert_large/multi-label/best_model_w_adam_ifeng_0.9067.pt  \
+--model_name_ensemble chinanews ifeng \
+--model_ckpt_ensemble ./output/model/roberta/multi-label/best_model_w_adam_0.8736800782378012.pt ./output/model/roberta/multi-label/best_model_w_adam_ifeng_0.8732.pt ./output/model/macbert/multi-label/best_model_w_adam_0.835668094846977.pt \
+--train_data_dir ./data/train.csv \
+--dev_data_dir ./data/dev.csv \
+--test_data_dir ./data/test.csv \
+--output_dir ./output \
+--strategy multi-label \
+--do_predict True \
+--ensemble True
