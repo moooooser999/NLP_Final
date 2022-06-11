@@ -1,4 +1,4 @@
-CUDA_DEVICES_VISIBLE=1,2,3 python3 train.py \
+python3 ../utils/aspect_classifier.py \
 --project_name NLP_FINAL_roberta_base_finetuned \
 --model_name roberta \
 --train_data_dir ./data/train.csv \
