@@ -1,9 +1,10 @@
+## Aspect Category
 ### Setup the environment
 
 ```
-#setup a clean conda environment
+#setup a clean conda environment and install pytorch and cudatoolkit
 
-conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch
+conda install pytorch torchaudio cudatoolkit=11.3 -c pytorch
 
 # install packages
 pip3 install -r requirements.txtuer/roberta-base-finetuned-chinanews-chinese uer/roberta-base-finetuned-ifeng-chinese hfl/chinese-macbert-base \

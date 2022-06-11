@@ -1,6 +1,6 @@
-transformers
-wandb
-pandas
-tqdm
-sklearn
+transformers==4.19.2
+wandb==0.12.16
+pandas==1.4.2
+tqdm==4.64.0
+scikit-learn==1.1.1
 
