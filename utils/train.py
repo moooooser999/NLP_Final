@@ -4,7 +4,7 @@ import torch
 import os
 import logging
 
-from model import ForMultipleAns
+from utils.model import ForMultipleAns
 from pathlib import Path
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from torch.utils.data import DataLoader
