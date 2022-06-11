@@ -304,13 +304,13 @@ def parse_args() -> Namespace:
         '--model_name_ensemble',
         type=Path,
         nargs='+',
-        help='Name of pretrained or finetuned model',
+        help='Name of pretrained or finetuned model, model included macbert_large, macbert, chinanews,ifeng, jd_full,dianping',
     )
     parser.add_argument(
         '--model_ckpt_ensemble',
         type=Path,
         nargs='+',
-        help='Dir to pretrained or finetuned model',
+        help='Path to pretrained or finetuned model',
     )
     parser.add_argument(
         "--train_data_dir",
